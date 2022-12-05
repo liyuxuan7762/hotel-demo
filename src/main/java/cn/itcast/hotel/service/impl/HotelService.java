@@ -20,15 +20,23 @@ import org.elasticsearch.index.query.functionscore.FunctionScoreQueryBuilder;
 import org.elasticsearch.index.query.functionscore.ScoreFunctionBuilders;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.SearchHits;
+import org.elasticsearch.search.aggregations.AggregationBuilders;
+import org.elasticsearch.search.aggregations.Aggregations;
+import org.elasticsearch.search.aggregations.bucket.terms.Terms;
 import org.elasticsearch.search.sort.SortBuilders;
 import org.elasticsearch.search.sort.SortOrder;
+import org.elasticsearch.search.suggest.SuggestBuilder;
+import org.elasticsearch.search.suggest.SuggestBuilders;
+import org.elasticsearch.search.suggest.completion.CompletionSuggestion;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import javax.annotation.Resource;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class HotelService extends ServiceImpl<HotelMapper, Hotel> implements IHotelService {
@@ -41,68 +49,160 @@ public class HotelService extends ServiceImpl<HotelMapper, Hotel> implements IHo
         try {
             SearchRequest request = new SearchRequest("hotel");
             // 查询关键字
-            BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
-            String key = searchParam.getKey();
-            if (key == null || "".equals(key)) {
-                boolQueryBuilder.must(QueryBuilders.matchAllQuery());
-            } else {
-                boolQueryBuilder.must(QueryBuilders.matchQuery("all", key));
-            }
-            if (searchParam.getCity() != null && !"".equals(searchParam.getCity())) {
-                boolQueryBuilder.filter(QueryBuilders.termQuery("city", searchParam.getCity()));
-            }
-            if (searchParam.getBrand() != null && !"".equals(searchParam.getBrand())) {
-                boolQueryBuilder.filter(QueryBuilders.termQuery("brand", searchParam.getBrand()));
-            }
-            if (searchParam.getStarName() != null && !"".equals(searchParam.getStarName())) {
-                boolQueryBuilder.filter(QueryBuilders.termQuery("startName", searchParam.getStarName()));
-            }
-            if (searchParam.getMaxPrice() != null) {
-                boolQueryBuilder.filter(QueryBuilders.rangeQuery("price").lt(searchParam.getMaxPrice()));
-            }
-            if (searchParam.getMinPrice() != null) {
-                boolQueryBuilder.filter(QueryBuilders.rangeQuery("price").gt(searchParam.getMinPrice()));
-            }
-
-            if (!StringUtils.isEmpty(searchParam.getLocation())) {
-                // 按照距离排序
-                request.source().sort(SortBuilders.geoDistanceSort(
-                     "location",
-                      new GeoPoint(searchParam.getLocation())
-                )
-                .order(SortOrder.ASC)
-                .unit(DistanceUnit.KILOMETERS)
-                );
-            }
-
-
-            // 设置广告置顶
-            FunctionScoreQueryBuilder functionScoreQuery =
-                    QueryBuilders.functionScoreQuery(
-                            // 原始查询，相关性算分的查询
-                            boolQueryBuilder,
-                            // function score的数组
-                            new FunctionScoreQueryBuilder.FilterFunctionBuilder[]{
-                                    // 其中的一个function score 元素
-                                    new FunctionScoreQueryBuilder.FilterFunctionBuilder(
-                                            // 过滤条件
-                                            QueryBuilders.termQuery("isAD", true),
-                                            // 算分函数
-                                            ScoreFunctionBuilders.weightFactorFunction(10)
-                                    )
-                            });
-
-            // 分页
-            int page = searchParam.getPage();
-            int size = searchParam.getSize();
-            request.source().from((page - 1) * size);
-            request.source().size(size);
-            request.source().query(functionScoreQuery);
+            buildBasicQuery(searchParam, request);
             SearchResponse response = client.search(request, RequestOptions.DEFAULT);
             return parseResult(response);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private void buildBasicQuery(SearchParam searchParam, SearchRequest request) {
+        BoolQueryBuilder boolQueryBuilder = QueryBuilders.boolQuery();
+        String key = searchParam.getKey();
+        if (key == null || "".equals(key)) {
+            boolQueryBuilder.must(QueryBuilders.matchAllQuery());
+        } else {
+            boolQueryBuilder.must(QueryBuilders.matchQuery("all", key));
+        }
+        if (searchParam.getCity() != null && !"".equals(searchParam.getCity())) {
+            boolQueryBuilder.filter(QueryBuilders.termQuery("city", searchParam.getCity()));
+        }
+        if (searchParam.getBrand() != null && !"".equals(searchParam.getBrand())) {
+            boolQueryBuilder.filter(QueryBuilders.termQuery("brand", searchParam.getBrand()));
+        }
+        if (searchParam.getStarName() != null && !"".equals(searchParam.getStarName())) {
+            boolQueryBuilder.filter(QueryBuilders.termQuery("startName", searchParam.getStarName()));
+        }
+        if (searchParam.getMaxPrice() != null) {
+            boolQueryBuilder.filter(QueryBuilders.rangeQuery("price").lt(searchParam.getMaxPrice()));
+        }
+        if (searchParam.getMinPrice() != null) {
+            boolQueryBuilder.filter(QueryBuilders.rangeQuery("price").gt(searchParam.getMinPrice()));
+        }
+
+        if (!StringUtils.isEmpty(searchParam.getLocation())) {
+            // 按照距离排序
+            request.source().sort(SortBuilders.geoDistanceSort(
+                                    "location",
+                                    new GeoPoint(searchParam.getLocation())
+                            )
+                            .order(SortOrder.ASC)
+                            .unit(DistanceUnit.KILOMETERS)
+            );
+        }
+
+
+        // 设置广告置顶
+        FunctionScoreQueryBuilder functionScoreQuery =
+                QueryBuilders.functionScoreQuery(
+                        // 原始查询，相关性算分的查询
+                        boolQueryBuilder,
+                        // function score的数组
+                        new FunctionScoreQueryBuilder.FilterFunctionBuilder[]{
+                                // 其中的一个function score 元素
+                                new FunctionScoreQueryBuilder.FilterFunctionBuilder(
+                                        // 过滤条件
+                                        QueryBuilders.termQuery("isAD", true),
+                                        // 算分函数
+                                        ScoreFunctionBuilders.weightFactorFunction(10)
+                                )
+                        });
+
+        // 分页
+        int page = searchParam.getPage();
+        int size = searchParam.getSize();
+        request.source().from((page - 1) * size);
+        request.source().size(size);
+        request.source().query(functionScoreQuery);
+    }
+
+    /**
+     * 根据星级，品牌，和城市对酒店进行聚合分析
+     *
+     * @return
+     */
+    @Override
+    public Map<String, List<String>> filter(SearchParam searchParam) {
+        try {
+            Map<String, List<String>> map = new HashMap<>();
+            SearchRequest request = new SearchRequest("hotel");
+
+            buildBasicQuery(searchParam, request);
+
+            request.source().size(0);
+            request.source().aggregation(
+                    AggregationBuilders.terms("brandAgg")
+                            .field("brand")
+                            .size(30)
+            );
+            request.source().aggregation(
+                    AggregationBuilders.terms("cityAgg")
+                            .field("city")
+                            .size(30)
+            );
+            request.source().aggregation(
+                    AggregationBuilders.terms("starNameAgg")
+                            .field("starName")
+                            .size(30)
+            );
+
+            SearchResponse search = this.client.search(request, RequestOptions.DEFAULT);
+
+            List<String> name = parseRes(search, "brandAgg");
+            map.put("brand", name);
+
+            name = parseRes(search, "cityAgg");
+            map.put("city", name);
+
+            name = parseRes(search, "starNameAgg");
+            map.put("starName", name);
+
+            return map;
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    @Override
+    public List<String> suggest(String key) {
+        try {
+            List<String> list = new ArrayList<>();
+            SearchRequest request = new SearchRequest("hotel");
+            request.source().suggest(new SuggestBuilder().addSuggestion(
+                    "search_suggestion",
+                    SuggestBuilders.completionSuggestion("suggestion")
+                            .prefix(key)
+                            .skipDuplicates(true)
+                            .size(10)
+            ));
+            SearchResponse response = this.client.search(request, RequestOptions.DEFAULT);
+
+            CompletionSuggestion suggestion = response.getSuggest().getSuggestion("search_suggestion");
+
+            if (suggestion.getOptions().size() > 0) {
+                for (CompletionSuggestion.Entry.Option option : suggestion.getOptions()) {
+                    String s = option.getText().toString();
+                    list.add(s);
+                }
+            }
+            return list;
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private List<String> parseRes(SearchResponse search, String aggName) {
+        Aggregations aggregations = search.getAggregations();
+        Terms term = aggregations.get(aggName);
+        List<String> list = new ArrayList<>();
+        List<? extends Terms.Bucket> buckets = term.getBuckets();
+        for (Terms.Bucket bucket : buckets) {
+            String name = bucket.getKeyAsString();
+            list.add(name);
+        }
+
+        return list;
     }
 
     private PageResult parseResult(SearchResponse response) {

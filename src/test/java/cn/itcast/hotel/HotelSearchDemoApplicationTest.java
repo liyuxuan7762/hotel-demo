@@ -17,6 +17,9 @@ import org.elasticsearch.search.SearchHits;
 import org.elasticsearch.search.fetch.subphase.highlight.HighlightBuilder;
 import org.elasticsearch.search.fetch.subphase.highlight.HighlightField;
 import org.elasticsearch.search.sort.SortOrder;
+import org.elasticsearch.search.suggest.SuggestBuilder;
+import org.elasticsearch.search.suggest.SuggestBuilders;
+import org.elasticsearch.search.suggest.completion.CompletionSuggestion;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -125,6 +128,28 @@ public class HotelSearchDemoApplicationTest {
                 }
             }
             System.out.println(hotelDoc);
+        }
+    }
+
+
+    // 实现自动补全功能
+    @Test
+    public void testAutoFill() throws IOException {
+        SearchRequest request = new SearchRequest("hotel");
+        request.source().suggest(new SuggestBuilder().addSuggestion(
+                "search_suggestion",
+                SuggestBuilders.completionSuggestion("suggestion")
+                        .prefix("s")
+                        .skipDuplicates(true)
+                        .size(10)
+        ));
+        SearchResponse response = this.client.search(request, RequestOptions.DEFAULT);
+
+        CompletionSuggestion suggestion = response.getSuggest().getSuggestion("search_suggestion");
+
+        for (CompletionSuggestion.Entry.Option option : suggestion.getOptions()) {
+            String s = option.getText().toString();
+            System.out.println(s);
         }
     }
 }
